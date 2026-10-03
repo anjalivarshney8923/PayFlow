@@ -2,6 +2,7 @@ package com.payflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.payflow.dto.CreateUserRequest;
+import com.payflow.repository.TransferRepository;
 import com.payflow.repository.UserRepository;
 import com.payflow.repository.WalletRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,6 +34,9 @@ class UserWalletIntegrationTest {
     private ObjectMapper objectMapper;
 
     @Autowired
+    private TransferRepository transferRepository;
+
+    @Autowired
     private UserRepository userRepository;
 
     @Autowired
@@ -40,6 +44,7 @@ class UserWalletIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        transferRepository.deleteAll();
         walletRepository.deleteAll();
         userRepository.deleteAll();
     }
@@ -308,7 +313,23 @@ class UserWalletIntegrationTest {
         }
 
         @Test
-        @DisplayName("Test 6 — Nonexistent user deposit returns 404 Not Found")
+        @DisplayName("Test 6 — Null amount deposit returns 400 Bad Request")
+        void shouldRejectNullAmountDeposit() throws Exception {
+            Long userId = createTestUser("Deposit User 6", "dep6@example.com");
+            createTestWallet(userId);
+
+            String requestJson = "{\"amount\": null}";
+
+            mockMvc.perform(post("/api/wallets/{userId}/deposit", userId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(requestJson))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status", is(400)))
+                    .andExpect(jsonPath("$.message", notNullValue()));
+        }
+
+        @Test
+        @DisplayName("Test 7 — Nonexistent user deposit returns 404 Not Found")
         void shouldReturn404WhenDepositingForNonexistentUser() throws Exception {
             com.payflow.dto.DepositRequest depositRequest = new com.payflow.dto.DepositRequest(new java.math.BigDecimal("500.00"));
 
@@ -321,7 +342,7 @@ class UserWalletIntegrationTest {
         }
 
         @Test
-        @DisplayName("Test 7 — Nonexistent wallet deposit returns 404 Not Found")
+        @DisplayName("Test 8 — Nonexistent wallet deposit returns 404 Not Found")
         void shouldReturn404WhenDepositingForUserWithoutWallet() throws Exception {
             Long userId = createTestUser("User Without Wallet", "nowallet@example.com");
 
@@ -336,24 +357,24 @@ class UserWalletIntegrationTest {
         }
 
         @Test
-        @DisplayName("Test 8 — Database persistence: retrieve wallet via GET and verify updated balance")
+        @DisplayName("Test 9 — Persistence: Create User -> Create Wallet -> Deposit -> GET Wallet -> Verify updated balance")
         void shouldPersistDepositedBalanceInDatabase() throws Exception {
             Long userId = createTestUser("Persistence User", "persist@example.com");
             createTestWallet(userId);
 
-            com.payflow.dto.DepositRequest depositRequest = new com.payflow.dto.DepositRequest(new java.math.BigDecimal("750.25"));
+            com.payflow.dto.DepositRequest depositRequest = new com.payflow.dto.DepositRequest(new java.math.BigDecimal("10000.00"));
 
             mockMvc.perform(post("/api/wallets/{userId}/deposit", userId)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(depositRequest)))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.balance", is(750.25)));
+                    .andExpect(jsonPath("$.balance", is(10000.00)));
 
             // Verify with GET endpoint
             mockMvc.perform(get("/api/wallets/{userId}", userId))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.userId", is(userId.intValue())))
-                    .andExpect(jsonPath("$.balance", is(750.25)));
+                    .andExpect(jsonPath("$.balance", is(10000.00)));
         }
     }
 }

@@ -1,10 +1,8 @@
 package com.payflow.controller;
 
-import com.payflow.dto.CreateUserRequest;
+import com.payflow.dto.TransferRequest;
 import com.payflow.dto.TransferResponse;
-import com.payflow.dto.UserResponse;
 import com.payflow.service.TransferService;
-import com.payflow.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -16,31 +14,22 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
-
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping("/api/transfers")
 @RequiredArgsConstructor
-public class UserController {
+public class TransferController {
 
-    private final UserService userService;
     private final TransferService transferService;
 
     @PostMapping
-    public ResponseEntity<UserResponse> createUser(@Valid @RequestBody CreateUserRequest request) {
-        UserResponse response = userService.createUser(request);
+    public ResponseEntity<TransferResponse> transfer(@Valid @RequestBody TransferRequest request) {
+        TransferResponse response = transferService.transfer(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<UserResponse> getUserById(@PathVariable Long id) {
-        UserResponse response = userService.getUserById(id);
+    public ResponseEntity<TransferResponse> getTransferById(@PathVariable Long id) {
+        TransferResponse response = transferService.getTransferById(id);
         return ResponseEntity.ok(response);
-    }
-
-    @GetMapping("/{userId}/transfers")
-    public ResponseEntity<List<TransferResponse>> getUserTransfers(@PathVariable Long userId) {
-        List<TransferResponse> transfers = transferService.getTransfersByUserId(userId);
-        return ResponseEntity.ok(transfers);
     }
 }
