@@ -43,6 +43,9 @@ class TransferConcurrencyIntegrationTest {
     private WalletService walletService;
 
     @Autowired
+    private com.payflow.repository.IdempotencyKeyRepository idempotencyKeyRepository;
+
+    @Autowired
     private TransferRepository transferRepository;
 
     @Autowired
@@ -53,6 +56,7 @@ class TransferConcurrencyIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        idempotencyKeyRepository.deleteAll();
         transferRepository.deleteAll();
         walletRepository.deleteAll();
         userRepository.deleteAll();
@@ -86,10 +90,11 @@ class TransferConcurrencyIntegrationTest {
         List<Future<?>> futures = new ArrayList<>();
 
         for (int i = 0; i < numberOfThreads; i++) {
+            final int index = i;
             futures.add(executor.submit(() -> {
                 try {
                     startLatch.await(); // wait for all threads to be ready
-                    transferService.transfer(new TransferRequest(senderId, receiverId, transferAmount));
+                    transferService.transfer("conc-t1-" + index, new TransferRequest(senderId, receiverId, transferAmount));
                     successCount.incrementAndGet();
                 } catch (Exception e) {
                     failureCount.incrementAndGet();
@@ -135,10 +140,11 @@ class TransferConcurrencyIntegrationTest {
         AtomicInteger failureCount = new AtomicInteger(0);
 
         for (int i = 0; i < numberOfThreads; i++) {
+            final int index = i;
             executor.submit(() -> {
                 try {
                     startLatch.await();
-                    transferService.transfer(new TransferRequest(senderId, receiverId, transferAmount));
+                    transferService.transfer("conc-t2-" + index, new TransferRequest(senderId, receiverId, transferAmount));
                     successCount.incrementAndGet();
                 } catch (Exception e) {
                     failureCount.incrementAndGet();
@@ -187,10 +193,11 @@ class TransferConcurrencyIntegrationTest {
 
         // 50 transfers from A -> B
         for (int i = 0; i < operationsPerDirection; i++) {
+            final int index = i;
             executor.submit(() -> {
                 try {
                     startLatch.await();
-                    transferService.transfer(new TransferRequest(userA, userB, transferAmount));
+                    transferService.transfer("conc-t3-ab-" + index, new TransferRequest(userA, userB, transferAmount));
                     successCount.incrementAndGet();
                 } catch (Exception e) {
                     failureCount.incrementAndGet();
@@ -202,10 +209,11 @@ class TransferConcurrencyIntegrationTest {
 
         // 50 transfers from B -> A
         for (int i = 0; i < operationsPerDirection; i++) {
+            final int index = i;
             executor.submit(() -> {
                 try {
                     startLatch.await();
-                    transferService.transfer(new TransferRequest(userB, userA, transferAmount));
+                    transferService.transfer("conc-t3-ba-" + index, new TransferRequest(userB, userA, transferAmount));
                     successCount.incrementAndGet();
                 } catch (Exception e) {
                     failureCount.incrementAndGet();

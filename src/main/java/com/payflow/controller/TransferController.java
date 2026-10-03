@@ -22,8 +22,11 @@ public class TransferController {
     private final TransferService transferService;
 
     @PostMapping
-    public ResponseEntity<TransferResponse> transfer(@Valid @RequestBody TransferRequest request) {
-        TransferResponse response = transferService.transfer(request);
+    public ResponseEntity<TransferResponse> transfer(
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody TransferRequest request
+    ) {
+        TransferResponse response = transferService.transfer(idempotencyKey, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 

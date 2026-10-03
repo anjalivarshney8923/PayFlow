@@ -34,6 +34,9 @@ class UserWalletIntegrationTest {
     private ObjectMapper objectMapper;
 
     @Autowired
+    private com.payflow.repository.IdempotencyKeyRepository idempotencyKeyRepository;
+
+    @Autowired
     private TransferRepository transferRepository;
 
     @Autowired
@@ -44,6 +47,7 @@ class UserWalletIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        idempotencyKeyRepository.deleteAll();
         transferRepository.deleteAll();
         walletRepository.deleteAll();
         userRepository.deleteAll();

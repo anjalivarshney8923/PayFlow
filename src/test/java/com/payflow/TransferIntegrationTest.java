@@ -37,6 +37,9 @@ class TransferIntegrationTest {
     private ObjectMapper objectMapper;
 
     @Autowired
+    private com.payflow.repository.IdempotencyKeyRepository idempotencyKeyRepository;
+
+    @Autowired
     private TransferRepository transferRepository;
 
     @Autowired
@@ -47,6 +50,7 @@ class TransferIntegrationTest {
 
     @BeforeEach
     void setUp() {
+        idempotencyKeyRepository.deleteAll();
         transferRepository.deleteAll();
         walletRepository.deleteAll();
         userRepository.deleteAll();
@@ -91,6 +95,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(userA, userB, new BigDecimal("1000.00"));
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isCreated())
@@ -122,6 +127,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(userA, userB, new BigDecimal("1500.00"));
 
         String response = mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isCreated())
@@ -152,6 +158,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(userA, userB, new BigDecimal("1000.00"));
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isBadRequest())
@@ -173,6 +180,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(99999L, userB, new BigDecimal("100.00"));
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isNotFound())
@@ -190,6 +198,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(userA, 88888L, new BigDecimal("100.00"));
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isNotFound())
@@ -207,6 +216,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(userA, userB, new BigDecimal("100.00"));
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isNotFound())
@@ -225,6 +235,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(userA, userB, new BigDecimal("100.00"));
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isNotFound())
@@ -242,6 +253,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(userA, userA, new BigDecimal("100.00"));
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isBadRequest())
@@ -260,6 +272,7 @@ class TransferIntegrationTest {
         String json = "{\"fromUserId\": " + userA + ", \"toUserId\": " + userB + ", \"amount\": 0.00}";
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isBadRequest())
@@ -277,6 +290,7 @@ class TransferIntegrationTest {
         String json = "{\"fromUserId\": " + userA + ", \"toUserId\": " + userB + ", \"amount\": -100.00}";
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isBadRequest())
@@ -296,6 +310,7 @@ class TransferIntegrationTest {
         TransferRequest transferRequest = new TransferRequest(userA, userB, new BigDecimal("1000.00"));
 
         String response = mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(transferRequest)))
                 .andExpect(status().isCreated())
@@ -335,12 +350,14 @@ class TransferIntegrationTest {
 
         // A -> B
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new TransferRequest(userA, userB, new BigDecimal("1000.00")))))
                 .andExpect(status().isCreated());
 
         // B -> A
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new TransferRequest(userB, userA, new BigDecimal("500.00")))))
                 .andExpect(status().isCreated());
@@ -348,6 +365,7 @@ class TransferIntegrationTest {
         // C -> B
         deposit(userC, new BigDecimal("2000.00"));
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new TransferRequest(userC, userB, new BigDecimal("200.00")))))
                 .andExpect(status().isCreated());
@@ -383,6 +401,7 @@ class TransferIntegrationTest {
         TransferRequest request = new TransferRequest(userA, userB, new BigDecimal("2000.00"));
 
         mockMvc.perform(post("/api/transfers")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest());

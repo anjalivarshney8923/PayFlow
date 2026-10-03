@@ -2,13 +2,16 @@ package com.payflow.service;
 
 import com.payflow.dto.TransferRequest;
 import com.payflow.dto.TransferResponse;
+import com.payflow.entity.IdempotencyKey;
 import com.payflow.entity.Transfer;
 import com.payflow.entity.TransferStatus;
 import com.payflow.entity.User;
 import com.payflow.entity.Wallet;
 import com.payflow.exception.BadRequestException;
+import com.payflow.exception.DuplicateResourceException;
 import com.payflow.exception.InsufficientBalanceException;
 import com.payflow.exception.ResourceNotFoundException;
+import com.payflow.repository.IdempotencyKeyRepository;
 import com.payflow.repository.TransferRepository;
 import com.payflow.repository.UserRepository;
 import com.payflow.repository.WalletRepository;
@@ -20,7 +23,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -44,11 +46,14 @@ class TransferServiceTest {
     @Mock
     private UserRepository userRepository;
 
+    @Mock
+    private IdempotencyKeyRepository idempotencyKeyRepository;
+
     @InjectMocks
     private TransferService transferService;
 
     @Test
-    @DisplayName("Should successfully transfer money between wallets")
+    @DisplayName("Should successfully transfer money between wallets with new idempotency key")
     void shouldTransferSuccessfully() {
         User sender = User.builder().id(1L).name("Sender").email("sender@example.com").build();
         User receiver = User.builder().id(2L).name("Receiver").email("receiver@example.com").build();
@@ -65,6 +70,7 @@ class TransferServiceTest {
                 .balance(new BigDecimal("2000.00"))
                 .build();
 
+        when(idempotencyKeyRepository.findByKey("key-1")).thenReturn(Optional.empty());
         when(userRepository.existsById(1L)).thenReturn(true);
         when(userRepository.existsById(2L)).thenReturn(true);
         when(walletRepository.findByUserIdWithLock(1L)).thenReturn(Optional.of(senderWallet));
@@ -77,7 +83,7 @@ class TransferServiceTest {
         });
 
         TransferRequest request = new TransferRequest(1L, 2L, new BigDecimal("1000.00"));
-        TransferResponse response = transferService.transfer(request);
+        TransferResponse response = transferService.transfer("key-1", request);
 
         assertThat(response).isNotNull();
         assertThat(response.id()).isEqualTo(100L);
@@ -92,6 +98,79 @@ class TransferServiceTest {
         verify(walletRepository).save(senderWallet);
         verify(walletRepository).save(receiverWallet);
         verify(transferRepository).save(any(Transfer.class));
+        verify(idempotencyKeyRepository).save(any(IdempotencyKey.class));
+    }
+
+    @Test
+    @DisplayName("Should return cached transfer response when same key and same request is submitted")
+    void shouldReturnExistingTransferForSameKeyAndRequest() {
+        TransferRequest request = new TransferRequest(1L, 2L, new BigDecimal("1000.00"));
+        String fingerprint = TransferService.calculateFingerprint(request);
+
+        Wallet fromWallet = Wallet.builder().id(10L).build();
+        Wallet toWallet = Wallet.builder().id(20L).build();
+        Transfer existingTransfer = Transfer.builder()
+                .id(50L)
+                .fromWallet(fromWallet)
+                .toWallet(toWallet)
+                .amount(new BigDecimal("1000.00"))
+                .status(TransferStatus.SUCCESS)
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        IdempotencyKey existingKeyRecord = IdempotencyKey.builder()
+                .id(1L)
+                .key("key-dup")
+                .requestFingerprint(fingerprint)
+                .transfer(existingTransfer)
+                .build();
+
+        when(idempotencyKeyRepository.findByKey("key-dup")).thenReturn(Optional.of(existingKeyRecord));
+
+        TransferResponse response = transferService.transfer("key-dup", request);
+
+        assertThat(response.id()).isEqualTo(50L);
+        assertThat(response.amount()).isEqualByComparingTo("1000.00");
+        verify(transferRepository, never()).save(any());
+        verify(walletRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should throw DuplicateResourceException when same key is used with different payload")
+    void shouldThrowWhenSameKeyUsedWithDifferentPayload() {
+        TransferRequest originalRequest = new TransferRequest(1L, 2L, new BigDecimal("1000.00"));
+        String originalFingerprint = TransferService.calculateFingerprint(originalRequest);
+
+        Transfer existingTransfer = Transfer.builder().id(50L).build();
+        IdempotencyKey existingKeyRecord = IdempotencyKey.builder()
+                .key("key-dup")
+                .requestFingerprint(originalFingerprint)
+                .transfer(existingTransfer)
+                .build();
+
+        when(idempotencyKeyRepository.findByKey("key-dup")).thenReturn(Optional.of(existingKeyRecord));
+
+        TransferRequest modifiedRequest = new TransferRequest(1L, 2L, new BigDecimal("500.00"));
+
+        assertThatThrownBy(() -> transferService.transfer("key-dup", modifiedRequest))
+                .isInstanceOf(DuplicateResourceException.class)
+                .hasMessageContaining("different request");
+
+        verify(transferRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should throw BadRequestException when idempotency key is missing or blank")
+    void shouldThrowWhenIdempotencyKeyIsMissingOrBlank() {
+        TransferRequest request = new TransferRequest(1L, 2L, new BigDecimal("100.00"));
+
+        assertThatThrownBy(() -> transferService.transfer(null, request))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Idempotency-Key header is required");
+
+        assertThatThrownBy(() -> transferService.transfer("   ", request))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Idempotency-Key header is required");
     }
 
     @Test
@@ -99,7 +178,7 @@ class TransferServiceTest {
     void shouldThrowWhenSenderAndReceiverAreSame() {
         TransferRequest request = new TransferRequest(1L, 1L, new BigDecimal("100.00"));
 
-        assertThatThrownBy(() -> transferService.transfer(request))
+        assertThatThrownBy(() -> transferService.transfer("key-self", request))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Sender and receiver cannot be the same user");
 
@@ -113,7 +192,7 @@ class TransferServiceTest {
 
         TransferRequest request = new TransferRequest(1L, 2L, new BigDecimal("100.00"));
 
-        assertThatThrownBy(() -> transferService.transfer(request))
+        assertThatThrownBy(() -> transferService.transfer("key-nosender", request))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Sender user not found");
 
@@ -128,7 +207,7 @@ class TransferServiceTest {
 
         TransferRequest request = new TransferRequest(1L, 2L, new BigDecimal("100.00"));
 
-        assertThatThrownBy(() -> transferService.transfer(request))
+        assertThatThrownBy(() -> transferService.transfer("key-norec", request))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Receiver user not found");
 
@@ -144,7 +223,7 @@ class TransferServiceTest {
 
         TransferRequest request = new TransferRequest(1L, 2L, new BigDecimal("100.00"));
 
-        assertThatThrownBy(() -> transferService.transfer(request))
+        assertThatThrownBy(() -> transferService.transfer("key-nowallet", request))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Wallet not found for user id: 1");
 
@@ -164,7 +243,7 @@ class TransferServiceTest {
 
         TransferRequest request = new TransferRequest(1L, 2L, new BigDecimal("100.00"));
 
-        assertThatThrownBy(() -> transferService.transfer(request))
+        assertThatThrownBy(() -> transferService.transfer("key-norecwallet", request))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("Wallet not found for user id: 2");
 
@@ -186,7 +265,7 @@ class TransferServiceTest {
 
         TransferRequest request = new TransferRequest(1L, 2L, new BigDecimal("1000.00"));
 
-        assertThatThrownBy(() -> transferService.transfer(request))
+        assertThatThrownBy(() -> transferService.transfer("key-lowbal", request))
                 .isInstanceOf(InsufficientBalanceException.class)
                 .hasMessageContaining("Insufficient wallet balance");
 

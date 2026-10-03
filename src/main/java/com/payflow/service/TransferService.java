@@ -2,33 +2,98 @@ package com.payflow.service;
 
 import com.payflow.dto.TransferRequest;
 import com.payflow.dto.TransferResponse;
+import com.payflow.entity.IdempotencyKey;
 import com.payflow.entity.Transfer;
 import com.payflow.entity.TransferStatus;
 import com.payflow.entity.Wallet;
 import com.payflow.exception.BadRequestException;
+import com.payflow.exception.DuplicateResourceException;
 import com.payflow.exception.InsufficientBalanceException;
 import com.payflow.exception.ResourceNotFoundException;
+import com.payflow.repository.IdempotencyKeyRepository;
 import com.payflow.repository.TransferRepository;
 import com.payflow.repository.UserRepository;
 import com.payflow.repository.WalletRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.List;
+import java.util.Optional;
 
 @Service
-@RequiredArgsConstructor
 public class TransferService {
 
     private final TransferRepository transferRepository;
     private final WalletRepository walletRepository;
     private final UserRepository userRepository;
+    private final IdempotencyKeyRepository idempotencyKeyRepository;
 
-    @Transactional
-    public TransferResponse transfer(TransferRequest request) {
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private TransferService self;
+
+    public TransferService(TransferRepository transferRepository,
+                           WalletRepository walletRepository,
+                           UserRepository userRepository,
+                           IdempotencyKeyRepository idempotencyKeyRepository) {
+        this.transferRepository = transferRepository;
+        this.walletRepository = walletRepository;
+        this.userRepository = userRepository;
+        this.idempotencyKeyRepository = idempotencyKeyRepository;
+    }
+
+    public TransferResponse transfer(String idempotencyKey, TransferRequest request) {
+        if (idempotencyKey == null || idempotencyKey.trim().isEmpty()) {
+            throw new BadRequestException("Idempotency-Key header is required and cannot be blank");
+        }
+
+        String trimmedKey = idempotencyKey.trim();
+        String fingerprint = calculateFingerprint(request);
+
+        // Fast path: check if idempotency key was already recorded
+        Optional<IdempotencyKey> existing = idempotencyKeyRepository.findByKey(trimmedKey);
+        if (existing.isPresent()) {
+            return handleExistingKey(existing.get(), fingerprint);
+        }
+
+        // Execute transfer inside transactional boundary
+        try {
+            TransferService service = self != null ? self : this;
+            return service.executeTransferWithIdempotency(trimmedKey, fingerprint, request);
+        } catch (DataIntegrityViolationException e) {
+            // Concurrent race: another transaction committed the same key simultaneously.
+            // Retrieve the winner's committed idempotency record.
+            for (int i = 0; i < 20; i++) {
+                Optional<IdempotencyKey> keyRecord = idempotencyKeyRepository.findByKey(trimmedKey);
+                if (keyRecord.isPresent()) {
+                    return handleExistingKey(keyRecord.get(), fingerprint);
+                }
+                try {
+                    Thread.sleep(25);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            throw e;
+        }
+    }
+
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public TransferResponse executeTransferWithIdempotency(String idempotencyKey, String fingerprint, TransferRequest request) {
+        // Re-check key inside transaction
+        Optional<IdempotencyKey> existing = idempotencyKeyRepository.findByKey(idempotencyKey);
+        if (existing.isPresent()) {
+            return handleExistingKey(existing.get(), fingerprint);
+        }
+
         if (request.fromUserId().equals(request.toUserId())) {
             throw new BadRequestException("Sender and receiver cannot be the same user");
         }
@@ -54,6 +119,12 @@ public class TransferService {
         Wallet secondWallet = walletRepository.findByUserIdWithLock(secondUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("Wallet not found for user id: " + secondUserId));
 
+        // Re-check idempotency key after acquiring locks in case another transaction just completed with this key
+        Optional<IdempotencyKey> existingAfterLock = idempotencyKeyRepository.findByKey(idempotencyKey);
+        if (existingAfterLock.isPresent()) {
+            return handleExistingKey(existingAfterLock.get(), fingerprint);
+        }
+
         // Assign sender and receiver wallets correctly according to the original transfer direction
         Wallet senderWallet = request.fromUserId().equals(firstWallet.getUser().getId()) ? firstWallet : secondWallet;
         Wallet receiverWallet = request.toUserId().equals(firstWallet.getUser().getId()) ? firstWallet : secondWallet;
@@ -78,7 +149,43 @@ public class TransferService {
                 .build();
 
         Transfer savedTransfer = transferRepository.save(transfer);
+
+        IdempotencyKey record = IdempotencyKey.builder()
+                .key(idempotencyKey)
+                .requestFingerprint(fingerprint)
+                .transfer(savedTransfer)
+                .build();
+
+        idempotencyKeyRepository.save(record);
+
         return TransferResponse.fromEntity(savedTransfer);
+    }
+
+    private TransferResponse handleExistingKey(IdempotencyKey existingKey, String currentFingerprint) {
+        if (!existingKey.getRequestFingerprint().equals(currentFingerprint)) {
+            throw new DuplicateResourceException("Idempotency-Key has already been used with a different request");
+        }
+        return TransferResponse.fromEntity(existingKey.getTransfer());
+    }
+
+    public static String calculateFingerprint(TransferRequest request) {
+        BigDecimal normalizedAmount = request.amount().setScale(2, RoundingMode.HALF_UP);
+        String raw = request.fromUserId() + "|" + request.toUserId() + "|" + normalizedAmount.toPlainString();
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) {
+                    hexString.append('0');
+                }
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 algorithm not available", e);
+        }
     }
 
     @Transactional(readOnly = true)
